@@ -1,0 +1,19 @@
+
+---
+- name: Sprava uzivatele a SSH klicu na Hore
+  hosts: hora
+  become: true
+
+  tasks:
+    - name: Zajistit existenci uzivatele
+      ansible.builtin.user:
+        name: "{{ hora_username }}"
+        state: present
+        update_password: on_create
+
+    - name: Nastavit autorizovane SSH klice
+      ansible.posix.authorized_key:
+        user: "{{ hora_username }}"
+        key: "{{ hora_ssh_public_keys | join('\n') }}"
+        state: present
+        exclusive: true
