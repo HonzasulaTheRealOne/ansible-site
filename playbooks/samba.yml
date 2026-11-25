@@ -1,0 +1,131 @@
+
+---
+- name: Instalace a konfigurace Samby
+  hosts: servers
+  become: true
+
+  tasks:
+    - name: Nainstalovat balicky pro Sambu
+      ansible.builtin.dnf:
+        name:
+          - samba
+          - samba-client
+          - samba-common-tools
+          - python3-firewall
+          - python3-libselinux
+          - policycoreutils-python-utils
+        state: present
+
+    - name: Vytvorit skupinu pro Sambu
+      ansible.builtin.group:
+        name: "{{ samba_group }}"
+        system: true
+        state: present
+
+    - name: Vytvorit uzivatele pouze pro Sambu
+      ansible.builtin.user:
+        name: "{{ samba_username }}"
+        group: "{{ samba_group }}"
+        system: true
+        create_home: false
+        home: /nonexistent
+        shell: /sbin/nologin
+        password_lock: true
+        state: present
+
+    - name: Vytvorit sdilene adresare
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ samba_username }}"
+        group: "{{ samba_group }}"
+        mode: '0770'
+      loop: "{{ samba_shares }}"
+
+    - name: Nastavit SELinux kontext
+      community.general.sefcontext:
+        target: "{{ item.path }}(/.*)?"
+        setype: samba_share_t
+        state: present
+      loop: "{{ samba_shares }}"
+      when: ansible_facts.selinux.status == 'enabled'
+
+    - name: Aplikovat SELinux kontext
+      ansible.builtin.command:
+        argv:
+          - restorecon
+          - -Rv
+          - "{{ item.path }}"
+      loop: "{{ samba_shares }}"
+      register: samba_restorecon
+      changed_when: >
+        (samba_restorecon.stdout | length > 0) or
+        (samba_restorecon.stderr | length > 0)
+      when: ansible_facts.selinux.status == 'enabled'
+
+    - name: Vygenerovat konfiguraci Samby
+      ansible.builtin.template:
+        src: smb.conf.j2
+        dest: /etc/samba/smb.conf
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+        validate: '/usr/bin/testparm -s %s'
+      notify: Restartovat Sambu
+
+
+
+    - name: Zakazat obecne povoleni sluzby Samba
+      ansible.posix.firewalld:
+        zone: "{{ item }}"
+        service: samba
+        permanent: true
+        immediate: true
+        state: disabled
+      loop: "{{ samba_firewall_zones }}"
+
+    - name: Zakazat obecne povoleni portu 445
+      ansible.posix.firewalld:
+        zone: "{{ item }}"
+        port: 445/tcp
+        permanent: true
+        immediate: true
+        state: disabled
+      loop: "{{ samba_firewall_zones }}"
+
+    - name: Povolit SMB pouze ze site TUL
+      ansible.posix.firewalld:
+        zone: "{{ item.0 }}"
+        rich_rule: >-
+          rule family="{{ item.1.family }}" priority="-10"
+          source address="{{ item.1.address }}"
+          port port="445" protocol="tcp" accept
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ samba_firewall_zones | product(samba_allowed_networks) | list }}"
+
+    - name: Zakazat SMB z ostatnich siti
+      ansible.posix.firewalld:
+        zone: "{{ item.0 }}"
+        rich_rule: >-
+          rule family="{{ item.1 }}" priority="-9"
+          port port="445" protocol="tcp" reject
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ samba_firewall_zones | product(['ipv4', 'ipv6']) | list }}"
+
+
+    - name: Spustit a povolit Sambu
+      ansible.builtin.systemd_service:
+        name: smb
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Restartovat Sambu
+      ansible.builtin.systemd_service:
+        name: smb
+        state: restarted

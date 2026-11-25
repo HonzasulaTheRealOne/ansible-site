@@ -1,0 +1,24 @@
+---
+samba_username: sambauser
+samba_group: sambauser
+
+samba_workgroup: WORKGROUP
+samba_server_string: "Samba server {{ inventory_hostname }}"
+
+samba_firewall_zones:
+  - public
+  - home
+samba_allowed_networks:
+  - family: ipv4
+    address: 147.230.0.0/16
+  - family: ipv6
+    address: "2001:718:1c01::/48"
+
+samba_shares:
+  - name: sdileni
+    comment: Sdilena slozka
+    path: /srv/samba/sdileni
+    browseable: true
+    read_only: false
+    valid_users:
+      - "{{ samba_username }}"
